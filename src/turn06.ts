@@ -12,9 +12,9 @@
  * exact interleaving the turn originally saw. A separate background
  * listener would leave a note's position relative to completions unordered.
  *
- * Self-contained: types, the turn, the endpoint and the demo mocks all live
- * in this file. The `steer` handler is the send side, so you can steer from
- * the shell.
+ * The model is real — `llm-openai.ts`, needs OPENAI_API_KEY. The turn, the
+ * endpoint and the fake tools live in this file. The `steer` handler is the
+ * send side, so you can steer from the shell.
  *
  *   npm run turn06
  *   restate deployments register --force http://localhost:9080
@@ -25,6 +25,7 @@
 
 import * as restate from "@restatedev/restate-sdk-gen";
 import {serve} from "@restatedev/restate-sdk";
+import {callModel} from "./llm-openai.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -162,78 +163,10 @@ const TinyAgent = restate.service({
 serve({services: [TinyAgent], port: 9080});
 
 // ===========================================================================
-// Demo mocks — off-stage. A scripted "model" and fake tools, so that the
-// interleavings the loop above is built for actually happen when you run it.
+// Fake tools — off-stage. The model is real (llm-openai.ts); the tools are
+// stand-ins with durations chosen so the interleavings above actually happen.
 // Nothing below is part of the story.
 // ===========================================================================
-
-/**
- * The scripted model. It reads the transcript and follows one fixed plan:
- *
- *   1. opening batch: search (instant), rm_rf (blocked by the guard), deploy (3s)
- *   2. deploy still out and no test started yet: start test (5s)
- *   3. a steering note that mentions the linter: run lint (instant)
- *   4. anything still pending: nothing new to ask — keep waiting
- *   5. every result in: summarize and finish
- */
-async function callModel(messages: Message[]): Promise<StepResult> {
-  const isAck = (r: ToolResult) =>
-    r.result === "started in background" || r.result === "task created";
-
-  const issued = messages.flatMap((m) => (m.role === "assistant" ? m.calls : []));
-  const results = messages.flatMap((m) => (m.role === "tool" ? m.results : []));
-  const settled = new Set(results.filter((r) => !isAck(r)).map((r) => r.id));
-  const pending = issued.filter((c) => !settled.has(c.id));
-  const notes = messages.flatMap((m) => (m.role === "user" ? [m.content] : [])).slice(1);
-
-  const issuedTool = (name: string) => issued.some((c) => c.toolName === name);
-  const pendingTool = (name: string) => pending.some((c) => c.toolName === name);
-  let seq = issued.length;
-  const call = (
-    toolName: string,
-    args: Record<string, unknown>,
-    background?: boolean,
-  ): ToolCall => ({id: `call-${++seq}`, toolName, args, ...(background ? {background} : {})});
-
-  let step: StepResult;
-  if (issued.length === 0) {
-    step = {
-      type: "tool_calls",
-      calls: [
-        call("search", {query: "how do we ship?"}),
-        call("rm_rf", {path: "/"}),
-        call("deploy", {env: "staging"}),
-      ],
-    };
-  } else if (notes.some((n) => /lint/i.test(n)) && !issuedTool("lint")) {
-    step = {type: "tool_calls", calls: [call("lint", {})]};
-  } else if (pendingTool("deploy") && !issuedTool("test")) {
-    step = {type: "tool_calls", calls: [call("test", {suite: "e2e"})]};
-  } else if (pending.length > 0) {
-    step = {type: "tool_calls", calls: []};
-  } else {
-    const toolName = new Map(issued.map((c) => [c.id, c.toolName]));
-    const summary = results
-      .filter((r) => !isAck(r))
-      .map((r) => `${toolName.get(r.id)}: ${r.result}`)
-      .join("; ");
-    step = {type: "final", message: `all done — ${summary}`};
-  }
-
-  log("model", `${pending.length} pending → ${describe(step)}`);
-  return step;
-}
-
-function describe(step: StepResult): string {
-  if (step.type === "final") return `final: "${step.message}"`;
-  if (step.calls.length === 0) return "nothing new to ask, keep waiting";
-  return (
-    "calls " +
-    step.calls
-      .map((c) => `${c.id}=${c.toolName}${c.background ? " (background)" : ""}`)
-      .join(", ")
-  );
-}
 
 /** Fake sandbox provisioning: returns a plain, journal-friendly reference. */
 async function provisionSandbox(): Promise<SandboxRef> {
@@ -242,13 +175,17 @@ async function provisionSandbox(): Promise<SandboxRef> {
   return {id, url: `https://sandbox.example.com/${id}`};
 }
 
-/** Fake tools: deploy takes 3s, test takes 5s, everything else is instant. */
+/** Fake tools: deploy takes 3s, test takes 5s, everything else is instant.
+ * `search` answers with a pointer to the other tools, so a real model knows
+ * what to do next instead of searching again. */
 async function runTool(call: ToolCall, sandbox: SandboxRef): Promise<string> {
   const ms = call.toolName === "deploy" ? 3_000 : call.toolName === "test" ? 5_000 : 0;
   log("tool", `${call.id} ${call.toolName} running in ${sandbox.id}${ms ? ` (${ms / 1000}s)` : ""}`);
   await new Promise((resolve) => setTimeout(resolve, ms));
   log("tool", `${call.id} ${call.toolName} done`);
-  return `${call.toolName} ok`;
+  return call.toolName === "search"
+    ? "found: deploy with the deploy tool (env: staging), run the e2e suite with the test tool, lint with the lint tool"
+    : `${call.toolName} ok`;
 }
 
 /** The guardrail: anything rm-shaped is blocked. */

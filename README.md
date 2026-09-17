@@ -9,9 +9,9 @@ Built on Restate's generator SDK, [`@restatedev/restate-sdk-gen`](https://www.np
 
 ## The ladder
 
-Each file is one stage and is fully self-contained: the types, the turn, the Restate
-endpoint and the demo mocks (a scripted model, fake tools) all live in that one file.
-Run any of them on its own.
+Each file is one stage: the types, the turn, the Restate endpoint and the fake tools
+live in that file. The model is real — `src/llm-openai.ts`, on the OpenAI chat
+completions API. Run any stage on its own.
 
 | File | Stage | What changes |
 | --- | --- | --- |
@@ -25,10 +25,11 @@ Run any of them on its own.
 
 ## Run a stage
 
-Prerequisites: Node.js 22+ and a Restate server.
+Prerequisites: Node.js 22+, a Restate server, and an OpenAI API key.
 
 ```bash
 npm install
+export OPENAI_API_KEY=sk-...        # OPENAI_MODEL overrides the default (gpt-5-mini)
 
 # 1. a Restate server, in a second terminal (pick one)
 npx @restatedev/restate-server
@@ -45,9 +46,9 @@ npx @restatedev/restate deployments register --force http://localhost:9080
 curl localhost:8080/TinyAgent/turn01 --json '"ship the new build"'
 ```
 
-Watch the terminal running the stage: the mocks log every model decision, guard
-verdict and tool run with a timestamp, so the interleavings are visible. `turn01`
-returns after about three seconds (the deploy), not the sum of the tool durations.
+Watch the terminal running the stage: every model decision, guard verdict and tool
+run is logged with a timestamp, so the interleavings are visible. In `turn01` the
+tool batch takes about three seconds (the deploy), not the sum of the tool durations.
 
 ## Steering a running turn (turn06, finale)
 
@@ -69,48 +70,41 @@ note and starts a linter while the deploy is still running.
 
 ## Approving a tool call (finale)
 
-In `src/humanApproval.ts` every deploy waits for a person. The stage log names the
-waiting call; in the scripted scenario the deploy is always `call-3`.
+In `src/humanApproval.ts` every deploy waits for a person. The stage log prints the
+approve command with the waiting call's id; fill in the invocation id from `/send`.
 
 ```bash
 ID=$(curl -s localhost:8080/TinyAgent/turn06/send --json '"ship the new build"' | jq -r .invocationId)
 # take your time — the turn is suspended, no process is pinned
-curl localhost:8080/TinyAgent/approve --json "{\"invocationId\": \"$ID\", \"callId\": \"call-3\", \"decision\": \"approved\"}"
+curl localhost:8080/TinyAgent/approve --json "{\"invocationId\": \"$ID\", \"callId\": \"<call id from the log>\", \"decision\": \"approved\"}"
 curl localhost:8080/restate/invocation/$ID/attach
 ```
 
 Any other decision string denies the call, and the model reads the denial as a plain
 tool result.
 
-## Using a real model
+## The model
 
-`src/llm-openai.ts` is `llm` implemented on the OpenAI chat completions API: the same
-transcript in, the same `StepResult` out, still one journaled `run`. To use it in a
-stage, delete that stage's mock `callModel` and import the real one:
+`src/llm-openai.ts` is `llm` on the OpenAI chat completions API: the transcript in, a
+`StepResult` out, still one journaled `run`. Every stage imports its `callModel`.
 
-```ts
-import {callModel} from "./llm-openai.js";
-```
+Tool calls are function calls; a `background: true` argument marks a call the loop
+should not await within the step (turn04). A plain-text reply is the final answer. The
+single word `WAIT` means "nothing new to ask, keep waiting" (turn05+); a `WAIT` when
+nothing is pending is answered with a nudge to finish, because the task-based loops
+would otherwise park for good. Results that land later than the call they answer
+(background tasks, select wake-ups) are reported to the model as user messages, since
+the API only accepts a tool message directly after its tool call.
 
-It needs `OPENAI_API_KEY`; `OPENAI_MODEL` overrides the default model. Tool calls are
-function calls, a plain-text reply is the final answer, and the single word `WAIT`
-means "nothing new to ask, keep waiting". Results that land later than the call they
-answer (background tasks, select wake-ups) are reported to the model as user messages,
-because the API only accepts a tool message directly after its tool call.
-
-## The scripted scenario
-
-The mock model follows one plan so the interesting interleavings actually happen:
+## The fake tools
 
 | Tool | Duration | Notes |
 | --- | --- | --- |
-| `search` | instant | |
+| `search` | instant | answers with a pointer to the other tools |
 | `rm_rf` | instant | blocked by the guardrail from turn02 onwards |
-| `deploy` | 3s | background in turn04; needs approval in the finale |
-| `test` | 5s | started while the deploy is still out |
-| `lint` | instant | only when a steering note mentions the linter |
-
-The model finishes as soon as every call it issued has a real result.
+| `deploy` | 3s | needs approval in the finale |
+| `test` | 5s | |
+| `lint` | instant | |
 
 ## Scripts
 
