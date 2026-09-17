@@ -1,0 +1,30 @@
+{
+  "name": "intro-restate",
+  "version": "0.0.1",
+  "private": true,
+  "description": "A durable agent loop in six snippets, on the Restate generator SDK (@restatedev/restate-sdk-gen)",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc",
+    "turn01": "tsx src/turn01.ts",
+    "turn02": "tsx src/turn02.ts",
+    "turn03": "tsx src/turn03.ts",
+    "turn04": "tsx src/turn04.ts",
+    "turn05": "tsx src/turn05.ts",
+    "turn06": "tsx src/turn06.ts",
+    "humanApproval": "tsx src/humanApproval.ts"
+  },
+  "dependencies": {
+    "@restatedev/restate-sdk": "^1.17.1",
+    "@restatedev/restate-sdk-gen": "^1.17.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24",
+    "tsx": "^4",
+    "typescript": "^5"
+  }
+}
