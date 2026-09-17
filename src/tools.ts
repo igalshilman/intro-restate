@@ -4,12 +4,12 @@
 import {log} from "./log.js";
 import type {ToolCall, SandboxRef} from "./types.js";
 
-/** Fake tools: deploy takes 3s, test takes 5s, everything else is instant.
+/** Fake tools: deploy takes 300ms, test takes 500ms, everything else is instant.
  * `search` answers with a pointer to the other tools, so a real model knows
  * what to do next instead of searching again. */
 export async function runTool(call: ToolCall, sandbox: SandboxRef): Promise<string> {
-  const ms = call.toolName === "deploy" ? 3_000 : call.toolName === "test" ? 5_000 : 0;
-  log("tool", `${call.id} ${call.toolName} running in ${sandbox.id}${ms ? ` (${ms / 1000}s)` : ""}`);
+  const ms = call.toolName === "deploy" ? 300 : call.toolName === "test" ? 500 : 0;
+  log("tool", `${call.id} ${call.toolName} running in ${sandbox.id}${ms ? ` (${ms}ms)` : ""}`);
   await new Promise((resolve) => setTimeout(resolve, ms));
   log("tool", `${call.id} ${call.toolName} done`);
   return call.toolName === "search"
@@ -26,7 +26,12 @@ export async function evaluateGuard(call: ToolCall): Promise<boolean> {
 
 /** "Notifies" the approver: prints the command that resolves this approval. */
 export async function notifyApprover(call: ToolCall): Promise<void> {
-  log("approver", `${call.id} ${call.toolName} is waiting for a human. Approve it with:`);
+  log("approver", `${call.id} ${call.toolName} is waiting for a human. Steer while it waits (no time limit):`);
+  log(
+    "approver",
+    `  curl localhost:8080/finale/steer --json '{"invocationId": "<id from /send>", "note": "Please also run the linter."}'`,
+  );
+  log("approver", "When you are done steering, approve it with:");
   log(
     "approver",
     `  curl localhost:8080/finale/approve --json '{"invocationId": "<id from /send>", "callId": "${call.id}", "decision": "approved"}'`,

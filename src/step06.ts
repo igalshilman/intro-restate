@@ -2,7 +2,7 @@
 //
 //   npm run dev                                          # serves step01..step06 and finale on :9080
 //   restate deployments register http://localhost:9080
-//   ID=$(curl -s localhost:8080/step06/run/send --json '"Ship the new build: find out how we deploy, deploy it to staging, run the e2e test suite, and delete /tmp/old-builds."' | jq -r .invocationId)
+//   ID=$(curl -s localhost:8080/step06/run/send --json '{"message":"Ship the new build: find out how we deploy, deploy it to staging, run the e2e test suite, and delete /tmp/old-builds."}' | jq -r .invocationId)
 //   curl localhost:8080/step06/steer --json "{\"invocationId\": \"$ID\", \"note\": \"please also run the linter\"}"
 //   curl localhost:8080/restate/invocation/$ID/attach
 
@@ -85,12 +85,14 @@ export const step06 = restate.service({
   handlers: {
     run: restate.schemas(
       {
-        input: z.string().default(
-          "Ship the new build: find out how we deploy, then start a staging deploy and the e2e test suite together. Incorporate any follow-up instructions that arrive while they run. Wait for every real result before summarizing.",
-        ),
+        input: z.object({
+          message: z.string().default(
+            "Ship the new build: find out how we deploy, then start a staging deploy and the e2e test suite together. Incorporate any follow-up instructions that arrive while they run. Wait for every real result before summarizing.",
+          ),
+        }),
         output: z.string(),
       },
-      turn06,
+      ({message}) => turn06(message),
     ),
     steer: restate.schemas(
       {

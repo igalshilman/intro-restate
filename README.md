@@ -34,7 +34,7 @@ Prerequisites: Node.js 22+, a Restate server, and an OpenAI API key.
 
 ```bash
 npm install
-export OPENAI_API_KEY=sk-...        # OPENAI_MODEL overrides the default (gpt-5-mini)
+export OPENAI_API_KEY=sk-...        # OPENAI_MODEL overrides the default (gpt-5.6-luna)
 
 # a Restate server, in a second terminal (pick one)
 npx @restatedev/restate-server
@@ -47,23 +47,26 @@ npm run dev
 npx @restatedev/restate deployments register http://localhost:9080
 
 # invoke a step
-curl localhost:8080/step01/run --json '"Ship the new build: find out how we deploy, deploy it to staging, run the e2e test suite, and delete /tmp/old-builds."'
+curl localhost:8080/step01/run --json '{"message":"Ship the new build: find out how we deploy, deploy it to staging, run the e2e test suite, and delete /tmp/old-builds."}'
 ```
 
-Every service has a `run` handler that takes the user message. Watch the terminal
-running `npm run dev`: every model decision, guard verdict and tool run is logged with a
-timestamp, so the interleavings are visible.
+Every service has a `run` handler that takes a JSON object with a `message` field.
+Watch the terminal running `npm run dev`: every model decision, guard verdict and
+tool run is logged with a timestamp, so the interleavings are visible.
 
 Every handler declares its input and output with Zod via `restate.schemas`.
-Each `run` input has a default prompt tailored to its stage: concurrent tools,
-guardrail rejection, background work, completion-driven follow-ups, steering, or
-human approval. These defaults are included in the advertised JSON schemas for
-the Restate UI. Send a JSON string to provide your own prompt, or omit the request
-body to use the stage's default:
+Each `run` input's `message` field has a default prompt tailored to its stage:
+concurrent tools, guardrail rejection, background work, completion-driven follow-ups,
+steering, or human approval. These defaults are included in the advertised JSON schemas for
+the Restate UI. Send `{"message": "Your instructions here"}` to provide your own
+prompt, or `{}` to use the stage's default:
 
 ```bash
-curl -X POST localhost:8080/step04/run
+curl localhost:8080/step04/run --json '{}'
 ```
+
+After changing handler schemas, rediscover the deployment in Restate to refresh
+the playground's input fields and defaults. The dev watcher only reloads code.
 
 The `steer` input defaults `note` to "Please also run the linter."; the `approve`
 input defaults `decision` to "approved". Invocation and call IDs are required and
@@ -75,7 +78,7 @@ The turn is addressed by its invocation id, which `/send` returns. The `steer` h
 on the same service is the send side.
 
 ```bash
-ID=$(curl -s localhost:8080/step06/run/send --json '"Ship the new build: find out how we deploy, deploy it to staging, run the e2e test suite, and delete /tmp/old-builds."' | jq -r .invocationId)
+ID=$(curl -s localhost:8080/step06/run/send --json '{"message":"Ship the new build: find out how we deploy, deploy it to staging, run the e2e test suite, and delete /tmp/old-builds."}' | jq -r .invocationId)
 curl localhost:8080/step06/steer --json "{\"invocationId\": \"$ID\", \"note\": \"please also run the linter\"}"
 
 # wait for and print the final answer
@@ -85,11 +88,16 @@ curl localhost:8080/restate/invocation/$ID/attach
 ## Approving a tool call (finale)
 
 In `finale` every deploy waits for a person. The log prints the approve command with
-the waiting call's id; fill in the invocation id from `/send`.
+the waiting call's id; fill in the invocation id from `/send`. This approval pause
+is also your steering window: send notes before approving, with no time limit.
+Other tools finish quickly, and the turn can finish soon after approval.
 
 ```bash
-ID=$(curl -s localhost:8080/finale/run/send --json '"Ship the new build: find out how we deploy, deploy it to staging, run the e2e test suite, and delete /tmp/old-builds."' | jq -r .invocationId)
-# take your time — the turn is suspended, no process is pinned
+ID=$(curl -s localhost:8080/finale/run/send --json '{"message":"Ship the new build: find out how we deploy, deploy it to staging, run the e2e test suite, and delete /tmp/old-builds."}' | jq -r .invocationId)
+# while the deploy waits, steer it (in the UI, invoke finale/steer with this ID)
+curl localhost:8080/finale/steer --json "{\"invocationId\": \"$ID\", \"note\": \"Please also run the linter.\"}"
+
+# take your time; approve only after you are done steering
 curl localhost:8080/finale/approve --json "{\"invocationId\": \"$ID\", \"callId\": \"<call id from the log>\", \"decision\": \"approved\"}"
 curl localhost:8080/restate/invocation/$ID/attach
 ```
@@ -102,6 +110,12 @@ tool result.
 `src/llm-openai.ts` is `llm` on the OpenAI chat completions API: the transcript in, a
 `StepResult` out, still one journaled `run`. The loops import its shared `llm`
 generator; the finale reuses step06's loop.
+
+The default `gpt-5.6-luna` uses `reasoning_effort: "none"`, `verbosity: "low"`, and
+`service_tier: "fast"` for fast, concise turns. These settings also apply to its
+dated snapshots; other `OPENAI_MODEL` overrides use their API defaults.
+[Fast mode](https://developers.openai.com/api/docs/guides/fast-mode) uses premium
+per-token pricing.
 
 Tool calls are function calls; a `background: true` argument marks a call the loop
 should not await within the step (step04). A plain-text reply is the final answer. The
@@ -117,8 +131,8 @@ the API only accepts a tool message directly after its tool call.
 | --- | --- | --- |
 | `search` | instant | answers with a pointer to the other tools |
 | `rm_rf` | instant | blocked by the guardrail from step02 onwards |
-| `deploy` | 3s | needs approval in the finale |
-| `test` | 5s | |
+| `deploy` | 300ms | needs approval in the finale |
+| `test` | 500ms | |
 | `lint` | instant | |
 
 ## Scripts

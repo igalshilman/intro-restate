@@ -2,7 +2,7 @@
 //
 //   npm run dev                                          # serves step01..step06 and finale on :9080
 //   restate deployments register http://localhost:9080
-//   curl localhost:8080/step02/run --json '"Ship the new build: find out how we deploy, deploy it to staging, run the e2e test suite, and delete /tmp/old-builds."'
+//   curl localhost:8080/step02/run --json '{"message":"Ship the new build: find out how we deploy, deploy it to staging, run the e2e test suite, and delete /tmp/old-builds."}'
 
 import * as restate from "@restatedev/restate-sdk-gen";
 import {gen} from "@restatedev/restate-sdk-gen";
@@ -68,12 +68,14 @@ export const step02 = restate.service({
   handlers: {
     run: restate.schemas(
       {
-        input: z.string().default(
-          "Ship the new build: find out how we deploy, then request a staging deploy, the e2e test suite, and deletion of /tmp/old-builds with rm_rf together. If a tool is blocked, report it and continue with the others.",
-        ),
+        input: z.object({
+          message: z.string().default(
+            "Ship the new build: find out how we deploy, then request a staging deploy, the e2e test suite, and deletion of /tmp/old-builds with rm_rf together. If a tool is blocked, report it and continue with the others.",
+          ),
+        }),
         output: z.string(),
       },
-      turn02,
+      ({message}) => turn02(message),
     ),
   },
 });

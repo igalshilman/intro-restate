@@ -2,8 +2,10 @@
 //
 //   npm run dev                                          # serves step01..step06 and finale on :9080
 //   restate deployments register http://localhost:9080
-//   ID=$(curl -s localhost:8080/finale/run/send --json '"Ship the new build: find out how we deploy, deploy it to staging, run the e2e test suite, and delete /tmp/old-builds."' | jq -r .invocationId)
-//   # the log prints the approve command with the waiting call's id
+//   ID=$(curl -s localhost:8080/finale/run/send --json '{"message":"Ship the new build: find out how we deploy, deploy it to staging, run the e2e test suite, and delete /tmp/old-builds."}' | jq -r .invocationId)
+//   # steer while the deploy waits for approval — there is no time limit
+//   curl localhost:8080/finale/steer --json "{\"invocationId\": \"$ID\", \"note\": \"Please also run the linter.\"}"
+//   # approve last; the log prints the waiting call's id
 //   curl localhost:8080/finale/approve --json "{\"invocationId\": \"$ID\", \"callId\": \"<call id from the log>\", \"decision\": \"approved\"}"
 //   curl localhost:8080/restate/invocation/$ID/attach
 
@@ -84,12 +86,14 @@ export const finale = restate.service({
   handlers: {
     run: restate.schemas(
       {
-        input: z.string().default(
-          "Ship the new build: find out how we deploy, then request a staging deploy and the e2e test suite together. The deploy needs human approval; keep working on the tests while it waits. Incorporate any follow-up instructions and wait for every real result before summarizing.",
-        ),
+        input: z.object({
+          message: z.string().default(
+            "Ship the new build: find out how we deploy, then request a staging deploy and the e2e test suite together. The deploy needs human approval; keep working on the tests while it waits. Incorporate any follow-up instructions and wait for every real result before summarizing.",
+          ),
+        }),
         output: z.string(),
       },
-      (userMessage) => turn06(userMessage, performCall),
+      ({message}) => turn06(message, performCall),
     ),
     steer: restate.schemas(
       {

@@ -30,7 +30,11 @@ export function* llm(messages: Message[]): restate.Operation<StepResult> {
 }
 
 const openai = new OpenAI();
-const MODEL = process.env.OPENAI_MODEL ?? "gpt-5-mini";
+const MODEL = process.env.OPENAI_MODEL ?? "gpt-5.6-luna";
+// Keep the demo responsive; other model overrides may support different settings.
+const FAST_SETTINGS = MODEL === "gpt-5.6-luna" || MODEL.startsWith("gpt-5.6-luna-")
+  ? {reasoning_effort: "none" as const, verbosity: "low" as const, service_tier: "fast" as const}
+  : {};
 
 const SYSTEM = `You are a release engineer working inside a sandbox. Use the tools to do what the user asks; you may request several at once.
 Tool results can arrive later than the call: "task created" and "started in background" are acknowledgements only — the real result follows as a message "Result of <call id> (<tool>): ...".
@@ -70,6 +74,7 @@ const TOOLS = [
 export async function callModel(messages: Message[]): Promise<StepResult> {
   const completion = await openai.chat.completions.create({
     model: MODEL,
+    ...FAST_SETTINGS,
     messages: render(messages),
     tools: TOOLS,
   });
