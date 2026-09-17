@@ -82,6 +82,22 @@ curl localhost:8080/restate/invocation/$ID/attach
 Any other decision string denies the call, and the model reads the denial as a plain
 tool result.
 
+## Using a real model
+
+`src/llm-openai.ts` is `llm` implemented on the OpenAI chat completions API: the same
+transcript in, the same `StepResult` out, still one journaled `run`. To use it in a
+stage, delete that stage's mock `callModel` and import the real one:
+
+```ts
+import {callModel} from "./llm-openai.js";
+```
+
+It needs `OPENAI_API_KEY`; `OPENAI_MODEL` overrides the default model. Tool calls are
+function calls, a plain-text reply is the final answer, and the single word `WAIT`
+means "nothing new to ask, keep waiting". Results that land later than the call they
+answer (background tasks, select wake-ups) are reported to the model as user messages,
+because the API only accepts a tool message directly after its tool call.
+
 ## The scripted scenario
 
 The mock model follows one plan so the interesting interleavings actually happen:
