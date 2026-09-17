@@ -1,5 +1,5 @@
 /**
- * llm — on the OpenAI chat completions API. Every step imports `callModel`.
+ * llm — on the OpenAI chat completions API. The loops share the durable `llm` wrapper.
  * Needs OPENAI_API_KEY; OPENAI_MODEL overrides the model.
  *
  * Wire protocol between the loop and the model:
@@ -21,6 +21,7 @@ import type {
   ChatCompletionTool,
 } from "openai/resources/chat/completions";
 import type {Message, StepResult, ToolCall} from "./types.js";
+import {log} from "./log.js";
 
 /** One model call over the conversation so far, journaled: on replay the
  * same answer comes back for free. */
@@ -97,7 +98,7 @@ export async function callModel(messages: Message[]): Promise<StepResult> {
     step = {type: "final", message: text};
   }
 
-  log(step);
+  logStep(step);
   return step;
 }
 
@@ -115,14 +116,14 @@ function pending(messages: Message[]): number {
   return messages.flatMap((m) => (m.role === "assistant" ? m.calls : [])).filter((c) => !settled.has(c.id)).length;
 }
 
-function log(step: StepResult): void {
+function logStep(step: StepResult): void {
   const what =
     step.type === "final"
       ? `final: ${JSON.stringify(step.message.length > 80 ? step.message.slice(0, 80) + "…" : step.message)}`
       : step.calls.length === 0
         ? "WAIT"
         : "calls " + step.calls.map((c) => `${c.toolName}${c.background ? " (background)" : ""}`).join(", ");
-  console.log(`${new Date().toISOString().slice(11, 23)} [model] ${what}`);
+  log("model", what);
 }
 
 /** Our transcript → OpenAI messages. */

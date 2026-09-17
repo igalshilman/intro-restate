@@ -5,23 +5,11 @@
 //   curl localhost:8080/step01/run --json '"Ship the new build: find out how we deploy, deploy it to staging, run the e2e test suite, and delete /tmp/old-builds."'
 
 import * as restate from "@restatedev/restate-sdk-gen";
-import {callModel} from "./llm-openai.js";
-import type {ToolCall, StepResult, Message, SandboxRef} from "./types.js";
-
-// ---------------------------------------------------------------------------
-// Durable building blocks
-// ---------------------------------------------------------------------------
-
-/** One model call over the conversation so far, journaled: on replay the
- * same answer comes back for free. */
-function* llm(messages: Message[]): restate.Operation<StepResult> {
-  return yield* restate.run(async () => callModel(messages), {name: "model"});
-}
-
-/** Provisions a sandbox once per turn; replay returns the journaled ref. */
-function* connect(): restate.Operation<SandboxRef> {
-  return yield* restate.run(async () => provisionSandbox(), {name: "sandbox"});
-}
+import {z} from "zod";
+import {llm} from "./llm-openai.js";
+import {connect} from "./sandbox.js";
+import {runTool} from "./tools.js";
+import type {Message} from "./types.js";
 
 // ---------------------------------------------------------------------------
 // The turn
@@ -55,35 +43,15 @@ function* turn01(userMessage: string): restate.Operation<string> {
 
 export const step01 = restate.service({
   name: "step01",
-  handlers: {run: turn01},
+  handlers: {
+    run: restate.schemas(
+      {
+        input: z.string().default(
+          "Ship the new build: find out how we deploy, then deploy it to staging and run the e2e test suite concurrently. Wait for both results before summarizing.",
+        ),
+        output: z.string(),
+      },
+      turn01,
+    ),
+  },
 });
-
-// ===========================================================================
-// Fake tools — off-stage. The model is real (llm-openai.ts); the tools are
-// stand-ins with durations chosen so the interleavings above actually happen.
-// Nothing below is part of the story.
-// ===========================================================================
-
-/** Fake sandbox provisioning: returns a plain, journal-friendly reference. */
-async function provisionSandbox(): Promise<SandboxRef> {
-  const id = `sbx-${crypto.randomUUID().slice(0, 8)}`;
-  log("sandbox", `provisioned ${id}`);
-  return {id, url: `https://sandbox.example.com/${id}`};
-}
-
-/** Fake tools: deploy takes 3s, test takes 5s, everything else is instant.
- * `search` answers with a pointer to the other tools, so a real model knows
- * what to do next instead of searching again. */
-async function runTool(call: ToolCall, sandbox: SandboxRef): Promise<string> {
-  const ms = call.toolName === "deploy" ? 3_000 : call.toolName === "test" ? 5_000 : 0;
-  log("tool", `${call.id} ${call.toolName} running in ${sandbox.id}${ms ? ` (${ms / 1000}s)` : ""}`);
-  await new Promise((resolve) => setTimeout(resolve, ms));
-  log("tool", `${call.id} ${call.toolName} done`);
-  return call.toolName === "search"
-    ? "found: deploy with the deploy tool (env: staging), run the e2e suite with the test tool, lint with the lint tool"
-    : `${call.toolName} ok`;
-}
-
-function log(who: string, message: string): void {
-  console.log(`${new Date().toISOString().slice(11, 23)} [${who}] ${message}`);
-}

@@ -7,48 +7,21 @@
 //   curl localhost:8080/restate/invocation/$ID/attach
 
 import * as restate from "@restatedev/restate-sdk-gen";
-import {callModel} from "./llm-openai.js";
-import type {ToolCall, StepResult, ToolResult, Message, SandboxRef} from "./types.js";
-
-// ---------------------------------------------------------------------------
-// Durable building blocks
-// ---------------------------------------------------------------------------
-
-/** One model call over the conversation so far, journaled: on replay the
- * same answer comes back for free. */
-function* llm(messages: Message[]): restate.Operation<StepResult> {
-  return yield* restate.run(async () => callModel(messages), {name: "model"});
-}
-
-/** Provisions a sandbox once per turn; replay returns the journaled ref. */
-function* connect(): restate.Operation<SandboxRef> {
-  return yield* restate.run(async () => provisionSandbox(), {name: "sandbox"});
-}
-
-/** One tool call as a durable pipeline: journaled guard verdict first, then
- * the tool only if allowed. A blocked call is just a structured result. */
-function* performCall(
-  call: ToolCall,
-  sandbox: SandboxRef,
-): restate.Operation<ToolResult> {
-  const allowed = yield* restate.run(async () => evaluateGuard(call), {
-    name: "guard",
-  });
-  if (!allowed) {
-    return {id: call.id, result: "blocked by guardrail"};
-  }
-
-  const result = yield* restate.run(async () => runTool(call, sandbox), {
-    name: "tool",
-  });
-  return {id: call.id, result};
-}
+import {z} from "zod";
+import {llm} from "./llm-openai.js";
+import {connect} from "./sandbox.js";
+import {performCall as performGuardedCall} from "./step03.js";
+import type {ToolResult, Message} from "./types.js";
 
 // ---------------------------------------------------------------------------
 // The turn
 // ---------------------------------------------------------------------------
 
-function* turn06(userMessage: string): restate.Operation<string> {
+/** The steering loop is reused by the finale with its approval-aware pipeline. */
+export function* turn06(
+  userMessage: string,
+  performCall: typeof performGuardedCall = performGuardedCall,
+): restate.Operation<string> {
   const sandbox = yield* connect();
 
   /** Everything in flight, keyed by call id. */
@@ -93,7 +66,7 @@ function* turn06(userMessage: string): restate.Operation<string> {
 
 /** Steer a running turn. The id is the turn's invocation id (constant across
  * retries and suspensions), so it's a stable address for a running turn. */
-function* steer({
+export function* steer({
   invocationId,
   note,
 }: {
@@ -109,42 +82,25 @@ function* steer({
 
 export const step06 = restate.service({
   name: "step06",
-  handlers: {run: turn06, steer},
+  handlers: {
+    run: restate.schemas(
+      {
+        input: z.string().default(
+          "Ship the new build: find out how we deploy, then start a staging deploy and the e2e test suite together. Incorporate any follow-up instructions that arrive while they run. Wait for every real result before summarizing.",
+        ),
+        output: z.string(),
+      },
+      turn06,
+    ),
+    steer: restate.schemas(
+      {
+        input: z.object({
+          invocationId: z.string().min(1).describe("The invocationId returned by /step06/run/send."),
+          note: z.string().default("Please also run the linter."),
+        }),
+        output: z.void(),
+      },
+      steer,
+    ),
+  },
 });
-
-// ===========================================================================
-// Fake tools — off-stage. The model is real (llm-openai.ts); the tools are
-// stand-ins with durations chosen so the interleavings above actually happen.
-// Nothing below is part of the story.
-// ===========================================================================
-
-/** Fake sandbox provisioning: returns a plain, journal-friendly reference. */
-async function provisionSandbox(): Promise<SandboxRef> {
-  const id = `sbx-${crypto.randomUUID().slice(0, 8)}`;
-  log("sandbox", `provisioned ${id}`);
-  return {id, url: `https://sandbox.example.com/${id}`};
-}
-
-/** Fake tools: deploy takes 3s, test takes 5s, everything else is instant.
- * `search` answers with a pointer to the other tools, so a real model knows
- * what to do next instead of searching again. */
-async function runTool(call: ToolCall, sandbox: SandboxRef): Promise<string> {
-  const ms = call.toolName === "deploy" ? 3_000 : call.toolName === "test" ? 5_000 : 0;
-  log("tool", `${call.id} ${call.toolName} running in ${sandbox.id}${ms ? ` (${ms / 1000}s)` : ""}`);
-  await new Promise((resolve) => setTimeout(resolve, ms));
-  log("tool", `${call.id} ${call.toolName} done`);
-  return call.toolName === "search"
-    ? "found: deploy with the deploy tool (env: staging), run the e2e suite with the test tool, lint with the lint tool"
-    : `${call.toolName} ok`;
-}
-
-/** The guardrail: anything rm-shaped is blocked. */
-async function evaluateGuard(call: ToolCall): Promise<boolean> {
-  const allowed = !/^rm/.test(call.toolName);
-  log("guard", `${call.id} ${call.toolName} → ${allowed ? "allowed" : "blocked"}`);
-  return allowed;
-}
-
-function log(who: string, message: string): void {
-  console.log(`${new Date().toISOString().slice(11, 23)} [${who}] ${message}`);
-}

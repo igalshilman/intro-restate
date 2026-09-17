@@ -9,9 +9,14 @@ Built on Restate's generator SDK, [`@restatedev/restate-sdk-gen`](https://www.np
 
 ## The ladder
 
-One file per stage. Each holds the turn, its tool pipeline and the fake tools. The
-model is real (`src/llm-openai.ts`, OpenAI chat completions), the types are shared
-(`src/types.ts`), and `src/app.ts` serves every stage as its own Restate service.
+One file per stage, focused on the control flow it introduces. The durable model
+call lives in `src/llm-openai.ts`, sandbox setup in `src/sandbox.ts`, fake tools and
+guardrails in `src/tools.ts`, and timestamped logging in `src/log.ts`. Shared types
+live in `src/types.ts`, and `src/app.ts` serves every stage as its own Restate service.
+
+Step03 defines the reusable `performCall` pipeline imported by steps04–06. The
+finale reuses step06's steering loop and send handler, supplying its own tool
+pipeline with human approval.
 
 | File | Service | Stage | What changes |
 | --- | --- | --- | --- |
@@ -49,6 +54,21 @@ Every service has a `run` handler that takes the user message. Watch the termina
 running `npm run dev`: every model decision, guard verdict and tool run is logged with a
 timestamp, so the interleavings are visible.
 
+Every handler declares its input and output with Zod via `restate.schemas`.
+Each `run` input has a default prompt tailored to its stage: concurrent tools,
+guardrail rejection, background work, completion-driven follow-ups, steering, or
+human approval. These defaults are included in the advertised JSON schemas for
+the Restate UI. Send a JSON string to provide your own prompt, or omit the request
+body to use the stage's default:
+
+```bash
+curl -X POST localhost:8080/step04/run
+```
+
+The `steer` input defaults `note` to "Please also run the linter."; the `approve`
+input defaults `decision` to "approved". Invocation and call IDs are required and
+must come from the running demo.
+
 ## Steering a running turn (step06, finale)
 
 The turn is addressed by its invocation id, which `/send` returns. The `steer` handler
@@ -80,7 +100,8 @@ tool result.
 ## The model
 
 `src/llm-openai.ts` is `llm` on the OpenAI chat completions API: the transcript in, a
-`StepResult` out, still one journaled `run`. Every step imports its `callModel`.
+`StepResult` out, still one journaled `run`. The loops import its shared `llm`
+generator; the finale reuses step06's loop.
 
 Tool calls are function calls; a `background: true` argument marks a call the loop
 should not await within the step (step04). A plain-text reply is the final answer. The
