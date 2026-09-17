@@ -1,56 +1,13 @@
-/**
- * turn03 — name the pipeline.
- *
- * Durable pipelines are just functions — they compose. Behaviour is identical
- * to turn02; the spawned body moved into a named `function*`, `performCall`.
- * Invoking a named `function*` already yields an `Operation`, so
- * `spawn(performCall(...))` needs no `gen()` wrapper.
- *
- * `performCall` is the seam the finale exploits: the human-approval gate
- * slots into this function while every loop above stays byte-identical.
- *
- * The model is real — `llm-openai.ts`, needs OPENAI_API_KEY. The turn, the
- * endpoint and the fake tools live in this file.
- *
- *   npm run turn03
- *   restate deployments register --force http://localhost:9080
- *   curl localhost:8080/TinyAgent/turn03 --json '"ship the new build"'
- */
+// step04 — background tool calls
+//
+//   npm run dev                                          # serves step01..step06 and finale on :9080
+//   restate deployments register http://localhost:9080
+//   curl localhost:8080/step04/run --json '"Ship the new build: find out how we deploy, deploy it to staging, run the e2e test suite, and delete /tmp/old-builds."'
 
 import * as restate from "@restatedev/restate-sdk-gen";
-import {serve} from "@restatedev/restate-sdk";
+import {gen} from "@restatedev/restate-sdk-gen";
 import {callModel} from "./llm-openai.js";
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-/** What the model can ask for. `background` marks a call the loop should
- * not await within the step (turn04). */
-type ToolCall = {
-  id: string;
-  toolName: string;
-  args: Record<string, unknown>;
-  background?: boolean;
-};
-
-/** One model step either finishes the turn or proposes a batch of tools. */
-type StepResult =
-  | {type: "final"; message: string}
-  | {type: "tool_calls"; calls: ToolCall[]};
-
-/** A tool result is keyed by its call id — that's how the model matches it. */
-type ToolResult = {id: string; result: string};
-
-/** The conversation transcript: every interaction is a typed entry. */
-type Message =
-  | {role: "user"; content: string}
-  | {role: "assistant"; calls: ToolCall[]}
-  | {role: "tool"; results: ToolResult[]};
-
-/** A serializable sandbox reference — what gets journaled is this plain
- * data, never a live connection. */
-type SandboxRef = {id: string; url: string};
+import type {ToolCall, StepResult, ToolResult, Message, SandboxRef} from "./types.js";
 
 // ---------------------------------------------------------------------------
 // Durable building blocks
@@ -90,7 +47,7 @@ function* performCall(
 // The turn
 // ---------------------------------------------------------------------------
 
-function* turn03(userMessage: string): restate.Operation<string> {
+function* turn04(userMessage: string): restate.Operation<string> {
   const sandbox = yield* connect();
 
   const messages: Message[] = [{role: "user", content: userMessage}];
@@ -101,24 +58,37 @@ function* turn03(userMessage: string): restate.Operation<string> {
     }
     messages.push({role: "assistant", calls: action.calls});
 
-    const tasks = action.calls.map((call) =>
-      restate.spawn(performCall(call, sandbox)),
-    );
+    const acks: ToolResult[] = [];
+    const tasks: restate.Task<ToolResult>[] = [];
+    for (const call of action.calls) {
+      if (!call.background) {
+        tasks.push(restate.spawn(performCall(call, sandbox)));
+        continue;
+      }
+      // Spawned but NOT awaited this step: the task keeps running while
+      // the loop moves on, and appends its own result — possibly during
+      // a later step — for the model's next look.
+      restate.spawn(
+        gen(function* () {
+          const result = yield* performCall(call, sandbox);
+          messages.push({role: "tool", results: [result]});
+        }),
+      );
+      acks.push({id: call.id, result: "started in background"});
+    }
     const results = yield* restate.all(tasks);
-    messages.push({role: "tool", results});
+    messages.push({role: "tool", results: [...acks, ...results]});
   }
 }
 
 // ---------------------------------------------------------------------------
-// Serving
+// The service — served together with the other steps by app.ts
 // ---------------------------------------------------------------------------
 
-const TinyAgent = restate.service({
-  name: "TinyAgent",
-  handlers: {turn03},
+export const step04 = restate.service({
+  name: "step04",
+  handlers: {run: turn04},
 });
-
-serve({services: [TinyAgent], port: 9080});
 
 // ===========================================================================
 // Fake tools — off-stage. The model is real (llm-openai.ts); the tools are

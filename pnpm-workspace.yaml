@@ -1,2 +1,4 @@
 allowBuilds:
-  esbuild: set this to true or false
+  esbuild: false
+minimumReleaseAgeExclude:
+  - openai@7.17.0

@@ -1,16 +1,12 @@
 /**
- * llm — the real thing, on the OpenAI chat completions API.
- *
- * A drop-in for the scripted `callModel` in any stage: the same transcript in,
- * the same `StepResult` out, still one journaled `run`. Delete a stage's mock
- * `callModel` and `import {callModel} from "./llm-openai.js"` — or import `llm`
- * itself. Needs OPENAI_API_KEY; OPENAI_MODEL overrides the model.
+ * llm — on the OpenAI chat completions API. Every step imports `callModel`.
+ * Needs OPENAI_API_KEY; OPENAI_MODEL overrides the model.
  *
  * Wire protocol between the loop and the model:
  *   - tool calls are OpenAI function calls; a `background: true` argument marks
- *     a call the loop should not await within the step (turn04)
+ *     a call the loop should not await within the step (step04)
  *   - a plain-text reply is the final answer
- *   - the single word WAIT means "nothing new to ask, keep waiting" (turn05+);
+ *   - the single word WAIT means "nothing new to ask, keep waiting" (step05+);
  *     a WAIT when nothing is pending is answered with a nudge to finish
  *
  * OpenAI insists that a tool message answers the tool call right before it. A
@@ -24,21 +20,7 @@ import type {
   ChatCompletionMessageParam,
   ChatCompletionTool,
 } from "openai/resources/chat/completions";
-
-type ToolCall = {
-  id: string;
-  toolName: string;
-  args: Record<string, unknown>;
-  background?: boolean;
-};
-type StepResult =
-  | {type: "final"; message: string}
-  | {type: "tool_calls"; calls: ToolCall[]};
-type ToolResult = {id: string; result: string};
-type Message =
-  | {role: "user"; content: string}
-  | {role: "assistant"; calls: ToolCall[]}
-  | {role: "tool"; results: ToolResult[]};
+import type {Message, StepResult, ToolCall} from "./types.js";
 
 /** One model call over the conversation so far, journaled: on replay the
  * same answer comes back for free. */

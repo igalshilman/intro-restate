@@ -8,15 +8,10 @@
     "node": ">=22"
   },
   "scripts": {
+    "dev": "tsx watch src/app.ts",
+    "start": "tsx src/app.ts",
     "typecheck": "tsc --noEmit",
-    "build": "tsc",
-    "turn01": "tsx src/turn01.ts",
-    "turn02": "tsx src/turn02.ts",
-    "turn03": "tsx src/turn03.ts",
-    "turn04": "tsx src/turn04.ts",
-    "turn05": "tsx src/turn05.ts",
-    "turn06": "tsx src/turn06.ts",
-    "humanApproval": "tsx src/humanApproval.ts"
+    "build": "tsc"
   },
   "dependencies": {
     "@restatedev/restate-sdk": "^1.17.1",

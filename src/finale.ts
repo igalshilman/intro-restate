@@ -1,62 +1,15 @@
-/**
- * finale — humanApproval: zoom into one tool call.
- *
- * A human-in-the-loop gate is two lines: a journaled notify step, then a
- * park on a signal named after the call id. Waiting is free: if the human
- * takes three days, the turn suspends — nothing polls, nothing times out, no
- * process is pinned — and the journal resumes the moment the decision lands.
- *
- * The loop never changes. `humanApproval` is dropped into `performCall` in
- * front of the tool run, and `turn06` below is byte-for-byte the one in
- * turn06.ts. The batch keeps running, steering keeps working, the model
- * keeps getting woken by other completions — one task is simply parked on a
- * person.
- *
- * The model is real — `llm-openai.ts`, needs OPENAI_API_KEY. The turn, the
- * endpoint and the fake tools live in this file. `steer` and `approve` are
- * the send side.
- *
- *   npm run humanApproval
- *   restate deployments register --force http://localhost:9080
- *   ID=$(curl -s localhost:8080/TinyAgent/turn06/send --json '"ship the new build"' | jq -r .invocationId)
- *   # the service log prints the approve command with the waiting call's id; decide whenever you like:
- *   curl localhost:8080/TinyAgent/approve --json "{\"invocationId\": \"$ID\", \"callId\": \"<call id from the log>\", \"decision\": \"approved\"}"
- */
+// finale — humanApproval — a person inside one tool call
+//
+//   npm run dev                                          # serves step01..step06 and finale on :9080
+//   restate deployments register http://localhost:9080
+//   ID=$(curl -s localhost:8080/finale/run/send --json '"Ship the new build: find out how we deploy, deploy it to staging, run the e2e test suite, and delete /tmp/old-builds."' | jq -r .invocationId)
+//   # the log prints the approve command with the waiting call's id
+//   curl localhost:8080/finale/approve --json "{\"invocationId\": \"$ID\", \"callId\": \"<call id from the log>\", \"decision\": \"approved\"}"
+//   curl localhost:8080/restate/invocation/$ID/attach
 
 import * as restate from "@restatedev/restate-sdk-gen";
-import {serve} from "@restatedev/restate-sdk";
 import {callModel} from "./llm-openai.js";
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-/** What the model can ask for. `background` marks a call the loop should
- * not await within the step (turn04). */
-type ToolCall = {
-  id: string;
-  toolName: string;
-  args: Record<string, unknown>;
-  background?: boolean;
-};
-
-/** One model step either finishes the turn or proposes a batch of tools. */
-type StepResult =
-  | {type: "final"; message: string}
-  | {type: "tool_calls"; calls: ToolCall[]};
-
-/** A tool result is keyed by its call id — that's how the model matches it. */
-type ToolResult = {id: string; result: string};
-
-/** The conversation transcript: every interaction is a typed entry. */
-type Message =
-  | {role: "user"; content: string}
-  | {role: "assistant"; calls: ToolCall[]}
-  | {role: "tool"; results: ToolResult[]};
-
-/** A serializable sandbox reference — what gets journaled is this plain
- * data, never a live connection. */
-type SandboxRef = {id: string; url: string};
+import type {ToolCall, StepResult, ToolResult, Message, SandboxRef} from "./types.js";
 
 // ---------------------------------------------------------------------------
 // Durable building blocks
@@ -83,7 +36,7 @@ function* humanApproval(call: ToolCall): restate.Operation<string> {
   return yield* restate.signal<string>(`approval-${call.id}`);
 }
 
-/** The same pipeline as turn03..06, with `humanApproval` dropped in front of
+/** The same pipeline as step03..06, with `humanApproval` dropped in front of
  * the tool run. The loop below does not change. */
 function* performCall(
   call: ToolCall,
@@ -187,15 +140,13 @@ function* approve({
 }
 
 // ---------------------------------------------------------------------------
-// Serving
+// The service — served together with the other steps by app.ts
 // ---------------------------------------------------------------------------
 
-const TinyAgent = restate.service({
-  name: "TinyAgent",
-  handlers: {turn06, steer, approve},
+export const finale = restate.service({
+  name: "finale",
+  handlers: {run: turn06, steer, approve},
 });
-
-serve({services: [TinyAgent], port: 9080});
 
 // ===========================================================================
 // Fake tools — off-stage. The model is real (llm-openai.ts); the tools are
@@ -235,7 +186,7 @@ async function notifyApprover(call: ToolCall): Promise<void> {
   log("approver", `${call.id} ${call.toolName} is waiting for a human. Approve it with:`);
   log(
     "approver",
-    `  curl localhost:8080/TinyAgent/approve --json '{"invocationId": "<id from /send>", "callId": "${call.id}", "decision": "approved"}'`,
+    `  curl localhost:8080/finale/approve --json '{"invocationId": "<id from /send>", "callId": "${call.id}", "decision": "approved"}'`,
   );
 }
 

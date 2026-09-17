@@ -1,62 +1,14 @@
-/**
- * turn06 — steering, raced in the same select.
- *
- * The turn holds a future for the durable "steer" signal — a note the user
- * can send the running turn at any time, addressed by its invocation id —
- * and races it in the same select as the tasks. A note joins the transcript
- * as a user message immediately (mid-turn, between tool completions) and the
- * signal is re-armed for the next note.
- *
- * The one select establishes ordering: notes and task completions are
- * journaled as a single deterministic sequence, and replay reproduces the
- * exact interleaving the turn originally saw. A separate background
- * listener would leave a note's position relative to completions unordered.
- *
- * The model is real — `llm-openai.ts`, needs OPENAI_API_KEY. The turn, the
- * endpoint and the fake tools live in this file. The `steer` handler is the
- * send side, so you can steer from the shell.
- *
- *   npm run turn06
- *   restate deployments register --force http://localhost:9080
- *   ID=$(curl -s localhost:8080/TinyAgent/turn06/send --json '"ship the new build"' | jq -r .invocationId)
- *   sleep 1
- *   curl localhost:8080/TinyAgent/steer --json "{\"invocationId\": \"$ID\", \"note\": \"please also run the linter\"}"
- */
+// step06 — steering, raced in the same select
+//
+//   npm run dev                                          # serves step01..step06 and finale on :9080
+//   restate deployments register http://localhost:9080
+//   ID=$(curl -s localhost:8080/step06/run/send --json '"Ship the new build: find out how we deploy, deploy it to staging, run the e2e test suite, and delete /tmp/old-builds."' | jq -r .invocationId)
+//   curl localhost:8080/step06/steer --json "{\"invocationId\": \"$ID\", \"note\": \"please also run the linter\"}"
+//   curl localhost:8080/restate/invocation/$ID/attach
 
 import * as restate from "@restatedev/restate-sdk-gen";
-import {serve} from "@restatedev/restate-sdk";
 import {callModel} from "./llm-openai.js";
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-/** What the model can ask for. `background` marks a call the loop should
- * not await within the step (turn04). */
-type ToolCall = {
-  id: string;
-  toolName: string;
-  args: Record<string, unknown>;
-  background?: boolean;
-};
-
-/** One model step either finishes the turn or proposes a batch of tools. */
-type StepResult =
-  | {type: "final"; message: string}
-  | {type: "tool_calls"; calls: ToolCall[]};
-
-/** A tool result is keyed by its call id — that's how the model matches it. */
-type ToolResult = {id: string; result: string};
-
-/** The conversation transcript: every interaction is a typed entry. */
-type Message =
-  | {role: "user"; content: string}
-  | {role: "assistant"; calls: ToolCall[]}
-  | {role: "tool"; results: ToolResult[]};
-
-/** A serializable sandbox reference — what gets journaled is this plain
- * data, never a live connection. */
-type SandboxRef = {id: string; url: string};
+import type {ToolCall, StepResult, ToolResult, Message, SandboxRef} from "./types.js";
 
 // ---------------------------------------------------------------------------
 // Durable building blocks
@@ -152,15 +104,13 @@ function* steer({
 }
 
 // ---------------------------------------------------------------------------
-// Serving
+// The service — served together with the other steps by app.ts
 // ---------------------------------------------------------------------------
 
-const TinyAgent = restate.service({
-  name: "TinyAgent",
-  handlers: {turn06, steer},
+export const step06 = restate.service({
+  name: "step06",
+  handlers: {run: turn06, steer},
 });
-
-serve({services: [TinyAgent], port: 9080});
 
 // ===========================================================================
 // Fake tools — off-stage. The model is real (llm-openai.ts); the tools are
